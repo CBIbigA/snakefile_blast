@@ -1,0 +1,73 @@
+import os
+import glob
+# Define the input directory
+reads_dir = "DataInput"
+
+# Define the output directory
+output_dir = "DataOutput/"
+
+#The fasta here will be the query
+INPUT="SNORDS_canonical_MZ.fa"
+
+# Define the wildcard pattern for matching sample names
+# Each fastq become a blast database
+SAMPLES = [os.path.basename(x).replace(".fastq.gz", "") for x in glob.glob(os.path.join(reads_dir, "*.fastq.gz"))]
+#with open("SRA_list.txt") as file:
+#    SAMPLES = [line.strip() for line in file]
+
+rule all:
+        input:
+                expand(output_dir +"blast/{sample}.tsv.gz",sample=SAMPLES)
+
+rule trimmomatic:
+    input:
+        reads_dir + "/{sample}.fastq.gz"  # input and output can be uncompressed or compressed
+    output:
+        output_dir +"trimmed/{sample}.fastq.gz"
+    log:
+        "logs/trimmomatic/{sample}.log"
+    params:
+        # list of trimmers (see manual)
+        trimmer=["ILLUMINACLIP:/DATA2/bioinfo_bigA/teamCavaille/202208_SNORDcandidates/202304_PublishedSRP160385/adapter.fa:2:30:7"],
+        # optional parameters
+        extra="",
+        compression_level="-9"
+    threads:
+        2
+    # optional specification of memory usage of the JVM that snakemake will respect with global
+    # resource restrictions (https://snakemake.readthedocs.io/en/latest/snakefiles/rules.html#resources)
+    # and which can be used to request RAM during cluster job submission as `{resources.mem_mb}`:
+    # https://snakemake.readthedocs.io/en/latest/executing/cluster.html#job-properties
+    wrapper:
+        "v1.25.0/bio/trimmomatic/se"
+
+rule fastq_from_fasta:
+        input:
+                output_dir +"trimmed/{sample}.fastq.gz"
+        output:
+                temp(output_dir +"blast/{sample}.fasta")
+        shell:
+                "seqtk seq -a {input} > {output}"
+
+rule make_db:
+        input:
+                output_dir +"blast/{sample}.fasta"
+        output:
+                output_dir +"blast/{sample}.ndb"
+        params:
+                prefix=output_dir +"blast/{sample}"
+        shell:
+                "makeblastdb -in {input} -dbtype nucl -parse_seqids -out {params.prefix}"
+
+
+rule magicblast:
+        input:
+                fa=INPUT,
+                db=output_dir +"blast/{sample}.ndb"
+        output:
+                output_dir +"blast/{sample}.tsv.gz"
+        params:
+                prefix=output_dir +"blast/{sample}"
+        threads:2
+        shell:
+                "magicblast -query {input.fa} -db {params.prefix} -num_threads {threads} -outfmt tabular -out {output} -gzo"
